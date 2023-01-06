@@ -1,0 +1,55 @@
+[package]
+name = "plonkup-aggregate"
+version = "0.1.0"
+authors = ["Lone G"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+ark-std = { version = "0.4.0-alpha", default-features = false }
+ark-ec = "0.4.0-alpha"
+ark-ff = "0.4.0-alpha"
+ark-poly = "0.4.0-alpha"
+ark-serialize = { version = "0.4.0-alpha", features = ["derive"] }
+derivative = { version = "2.2.0", default-features = false, features = ["use_core"] }
+itertools = { version = "0.10.1", default-features = false }
+merlin = { version = "3.0", default-features = false }
+num-traits = "0.2.14"
+rand_core = { version = "0.6", default-features = false, features = ["getrandom"] }
+rayon = { version = "1.5.3", optional = true }
+
+[dev-dependencies]
+ark-bn254 = "0.4.0-alpha"
+ark-bls12-377 = "0.4.0-alpha"
+ark-bls12-381 = "0.4.0-alpha"
+
+[features]
+# Default Features
+default = [
+    "std",
+    "asm",
+    "itertools/default",
+    "parallel",
+]
+
+# Raw Assembly
+asm = ["ark-ff/asm"]
+
+# Parallelism Features
+parallel = [
+    "rayon",
+    "ark-std/parallel",
+    "ark-ec/parallel",
+    "ark-ff/parallel",
+    "ark-poly/parallel",
+]
+
+# Enable Standard Library
+std = [
+    "ark-std/std",
+    "ark-ec/std",
+    "ark-ff/std",
+    "ark-poly/std",
+    "ark-serialize/std",
+]
