@@ -1,26 +1,41 @@
-use ark_ec::PairingEngine;
+use std::ops::AddAssign;
+use ark_ec::pairing::{Pairing, PairingOutput};
 
-use crate::transcript::{TranscriptProtocol, TranscriptAppender};
+use crate::{
+    transcript::{TranscriptProtocol, TranscriptAppender},
+    proof::GipaFinalValue,
+};
 use super::*;
 
-pub struct PermPrimitiveCommitments<E: PairingEngine> {
+pub struct PermPrimitiveCommitments<E: Pairing> {
     // commit with vk
-    pub z1_g_vk_comm: E::Fqk,
-    pub z1_next_vk_comm: E::G2Affine,
+    pub z1_g_vk: PairingOutput<E>,
+    pub z1_next_vk: E::G2Affine,
 }
 
 impl<E, T> TranscriptAppender<E, T> for PermPrimitiveCommitments<E>
 where
-    E: PairingEngine,
+    E: Pairing,
     T: TranscriptProtocol<E>,
 {
     fn append_in_transcript(&self, transcript: &mut T) {
-        transcript.append_gt("z1_g_vk_comm", &self.z1_g_vk_comm);
-        transcript.append_g2("z1_next_vk_comm", &self.z1_next_vk_comm);
+        transcript.append_gt("z1_g_vk", &self.z1_g_vk);
+        transcript.append_g2("z1_next_vk", &self.z1_next_vk);
     }
 }
 
-pub struct PermPrimitiveInnerProducts<E: PairingEngine> {
+pub(crate) fn perm_primitive_commit<E: Pairing>(
+    z1_next: &[E::ScalarField],
+    z1_g: &[E::G1Affine],
+    vk: &VKey<E>,
+) -> PermPrimitiveCommitments<E> {
+    PermPrimitiveCommitments {
+        z1_g_vk: pairing::<E>(z1_g, vk),
+        z1_next_vk: multiexponentiation(z1_next, vk),
+    }
+}
+
+pub struct PermPrimitiveInnerProducts<E: Pairing> {
     pub z1_g_r: E::G1Affine,
     pub z1_g_a_r: E::G1Affine,
     pub z1_g_b_r: E::G1Affine,
@@ -29,19 +44,51 @@ pub struct PermPrimitiveInnerProducts<E: PairingEngine> {
     pub z1_g_ac_r: E::G1Affine,
     pub z1_g_bc_r: E::G1Affine,
     pub z1_g_abc_r: E::G1Affine,
-    pub z1_next_r: E::Fr,
-    pub z1_next_a_r: E::Fr,
-    pub z1_next_b_r: E::Fr,
-    pub z1_next_c_r: E::Fr,
-    pub z1_next_ab_r: E::Fr,
-    pub z1_next_ac_r: E::Fr,
-    pub z1_next_bc_r: E::Fr,
-    pub z1_next_abc_r: E::Fr,
+    pub z1_next_r: E::ScalarField,
+    pub z1_next_a_r: E::ScalarField,
+    pub z1_next_b_r: E::ScalarField,
+    pub z1_next_c_r: E::ScalarField,
+    pub z1_next_ab_r: E::ScalarField,
+    pub z1_next_ac_r: E::ScalarField,
+    pub z1_next_bc_r: E::ScalarField,
+    pub z1_next_abc_r: E::ScalarField,
+}
+
+pub(crate) fn perm_primitive_inner_product<E: Pairing>(
+    r: &[E::ScalarField],
+    a_r: &[E::ScalarField], // scaled a(z) * r
+    b_r: &[E::ScalarField], // scaled b(z) * r
+    c_r: &[E::ScalarField], // scaled c(z) * r
+    ab_r: &[E::ScalarField], // scaled a(z)b(z) * r
+    ac_r: &[E::ScalarField], // scaled a(z)c(z) * r
+    bc_r: &[E::ScalarField], // scaled b(z)c(z) * r
+    abc_r: &[E::ScalarField], // scaled a(z)b(z)c(z) * r
+    z1_next: &[E::ScalarField],
+    z1_g: &[E::G1Affine],
+) -> PermPrimitiveInnerProducts<E> {
+    PermPrimitiveInnerProducts {
+        z1_g_r: multiexponentiation(r, z1_g),
+        z1_g_a_r: multiexponentiation(a_r, z1_g),
+        z1_g_b_r: multiexponentiation(b_r, z1_g),
+        z1_g_c_r: multiexponentiation(c_r, z1_g),
+        z1_g_ab_r: multiexponentiation(ab_r, z1_g),
+        z1_g_ac_r: multiexponentiation(ac_r, z1_g),
+        z1_g_bc_r: multiexponentiation(bc_r, z1_g),
+        z1_g_abc_r: multiexponentiation(abc_r, z1_g),
+        z1_next_r: scalars_inner_product(z1_next, r),
+        z1_next_a_r: scalars_inner_product(z1_next, a_r),
+        z1_next_b_r: scalars_inner_product(z1_next, b_r),
+        z1_next_c_r: scalars_inner_product(z1_next, c_r),
+        z1_next_ab_r: scalars_inner_product(z1_next, ab_r),
+        z1_next_ac_r: scalars_inner_product(z1_next, ac_r),
+        z1_next_bc_r: scalars_inner_product(z1_next, bc_r),
+        z1_next_abc_r: scalars_inner_product(z1_next, abc_r),
+    }
 }
 
 impl<E, T> TranscriptAppender<E, T> for PermPrimitiveInnerProducts<E>
 where
-    E: PairingEngine,
+    E: Pairing,
     T: TranscriptProtocol<E>,
 {
     fn append_in_transcript(&self, transcript: &mut T) {
@@ -64,9 +111,9 @@ where
     }
 }
 
-pub struct PermGipaCommitments<E: PairingEngine> {
+pub struct PermGipaCommitments<E: Pairing> {
     // commit with vk
-    pub z1_g_vk_comm: E::Fqk,
+    pub z1_g_vk_comm: PairingOutput<E>,
     pub z1_next_vk_comm: E::G2Affine,
     // inner product
     pub z1_g_r_ip: E::G1Affine,
@@ -77,19 +124,19 @@ pub struct PermGipaCommitments<E: PairingEngine> {
     pub z1_g_ac_r_ip: E::G1Affine,
     pub z1_g_bc_r_ip: E::G1Affine,
     pub z1_g_abc_r_ip: E::G1Affine,
-    pub z1_next_r_ip: E::Fr,
-    pub z1_next_a_r_ip: E::Fr,
-    pub z1_next_b_r_ip: E::Fr,
-    pub z1_next_c_r_ip: E::Fr,
-    pub z1_next_ab_r_ip: E::Fr,
-    pub z1_next_ac_r_ip: E::Fr,
-    pub z1_next_bc_r_ip: E::Fr,
-    pub z1_next_abc_r_ip: E::Fr,
+    pub z1_next_r_ip: E::ScalarField,
+    pub z1_next_a_r_ip: E::ScalarField,
+    pub z1_next_b_r_ip: E::ScalarField,
+    pub z1_next_c_r_ip: E::ScalarField,
+    pub z1_next_ab_r_ip: E::ScalarField,
+    pub z1_next_ac_r_ip: E::ScalarField,
+    pub z1_next_bc_r_ip: E::ScalarField,
+    pub z1_next_abc_r_ip: E::ScalarField,
 }
 
 impl<E, T> TranscriptAppender<E, T> for PermGipaCommitments<E>
 where
-    E: PairingEngine,
+    E: Pairing,
     T: TranscriptProtocol<E>,
 {
     fn append_in_transcript(&self, transcript: &mut T) {
@@ -114,86 +161,22 @@ where
     }
 }
 
-pub(crate) fn perm_primitive_commit<E: PairingEngine>(
-    z1_next: &[E::Fr],
-    z1_g: &[E::G1Affine],
-    vk: &VKey<E>,
-) -> PermPrimitiveCommitments<E> {
-    // commit with vk
-    let z1_g_vk_comm = pairing::<E>(z1_g, vk);
-    let z1_next_vk_comm = multiexponentiation(z1_next, vk);
-
-    PermPrimitiveCommitments {
-        z1_g_vk_comm,
-        z1_next_vk_comm,
-    }
-}
-
-pub(crate) fn perm_primitive_inner_product<E: PairingEngine>(
-    r: &[E::Fr],
-    a_r: &[E::Fr], // scaled a(z) * r
-    b_r: &[E::Fr], // scaled b(z) * r
-    c_r: &[E::Fr], // scaled c(z) * r
-    ab_r: &[E::Fr], // scaled a(z)b(z) * r
-    ac_r: &[E::Fr], // scaled a(z)c(z) * r
-    bc_r: &[E::Fr], // scaled b(z)c(z) * r
-    abc_r: &[E::Fr], // scaled a(z)b(z)c(z) * r
-    z1_next: &[E::Fr],
-    z1_g: &[E::G1Affine],
-) -> PermPrimitiveInnerProducts<E> {
-    let z1_g_r = multiexponentiation(r, z1_g);
-    let z1_g_a_r = multiexponentiation(a_r, z1_g);
-    let z1_g_b_r = multiexponentiation(b_r, z1_g);
-    let z1_g_c_r = multiexponentiation(c_r, z1_g);
-    let z1_g_ab_r = multiexponentiation(ab_r, z1_g);
-    let z1_g_ac_r = multiexponentiation(ac_r, z1_g);
-    let z1_g_bc_r = multiexponentiation(bc_r, z1_g);
-    let z1_g_abc_r = multiexponentiation(abc_r, z1_g);
-    let z1_next_r = scalars_inner_product(z1_next, r);
-    let z1_next_a_r = scalars_inner_product(z1_next, a_r);
-    let z1_next_b_r = scalars_inner_product(z1_next, b_r);
-    let z1_next_c_r = scalars_inner_product(z1_next, c_r);
-    let z1_next_ab_r = scalars_inner_product(z1_next, ab_r);
-    let z1_next_ac_r = scalars_inner_product(z1_next, ac_r);
-    let z1_next_bc_r = scalars_inner_product(z1_next, bc_r);
-    let z1_next_abc_r = scalars_inner_product(z1_next, abc_r);
-
-    PermPrimitiveInnerProducts {
-        z1_g_r,
-        z1_g_a_r,
-        z1_g_b_r,
-        z1_g_c_r,
-        z1_g_ab_r,
-        z1_g_ac_r,
-        z1_g_bc_r,
-        z1_g_abc_r,
-        z1_next_r,
-        z1_next_a_r,
-        z1_next_b_r,
-        z1_next_c_r,
-        z1_next_ab_r,
-        z1_next_ac_r,
-        z1_next_bc_r,
-        z1_next_abc_r,
-    }
-}
-
 pub(crate) fn permutation_gipa_commit<E>(
     split: usize,
-    r: &[E::Fr],
-    a_r: &[E::Fr], // scaled a(z) * r
-    b_r: &[E::Fr], // scaled b(z) * r
-    c_r: &[E::Fr], // scaled c(z) * r
-    ab_r: &[E::Fr], // scaled a(z)b(z) * r
-    ac_r: &[E::Fr], // scaled a(z)c(z) * r
-    bc_r: &[E::Fr], // scaled b(z)c(z) * r
-    abc_r: &[E::Fr], // scaled a(z)b(z)c(z) * r
-    z1_next: &[E::Fr],
+    r: &[E::ScalarField],
+    a_r: &[E::ScalarField], // scaled a(z) * r
+    b_r: &[E::ScalarField], // scaled b(z) * r
+    c_r: &[E::ScalarField], // scaled c(z) * r
+    ab_r: &[E::ScalarField], // scaled a(z)b(z) * r
+    ac_r: &[E::ScalarField], // scaled a(z)c(z) * r
+    bc_r: &[E::ScalarField], // scaled b(z)c(z) * r
+    abc_r: &[E::ScalarField], // scaled a(z)b(z)c(z) * r
+    z1_next: &[E::ScalarField],
     z1_g: &[E::G1Affine],
     vk: &VKey<E>,
 ) -> (PermGipaCommitments<E>, PermGipaCommitments<E>)
 where
-    E: PairingEngine,
+    E: Pairing,
 {
     let (r_left, r_right) = r.split_at(split);
 
@@ -362,4 +345,149 @@ where
     };
 
     (left_comms, right_comms)
+}
+
+pub(crate) struct PermFinalCommitments<E: Pairing> {
+    // commit with vk
+    z1_g_vk_comm: PairingOutput<E>,
+    z1_next_vk_comm: E::G2,
+    // inner product
+    z1_g_r_ip: E::G1,
+    z1_g_a_r_ip: E::G1,
+    z1_g_b_r_ip: E::G1,
+    z1_g_c_r_ip: E::G1,
+    z1_g_ab_r_ip: E::G1,
+    z1_g_ac_r_ip: E::G1,
+    z1_g_bc_r_ip: E::G1,
+    z1_g_abc_r_ip: E::G1,
+    z1_next_r_ip: E::ScalarField,
+    z1_next_a_r_ip: E::ScalarField,
+    z1_next_b_r_ip: E::ScalarField,
+    z1_next_c_r_ip: E::ScalarField,
+    z1_next_ab_r_ip: E::ScalarField,
+    z1_next_ac_r_ip: E::ScalarField,
+    z1_next_bc_r_ip: E::ScalarField,
+    z1_next_abc_r_ip: E::ScalarField,
+}
+
+impl<E: Pairing> PermFinalCommitments<E> {
+    pub(crate) fn from_primitive(
+        comm: PermPrimitiveCommitments<E>,
+        ip: PermPrimitiveInnerProducts<E>,
+    ) -> Self {
+        Self {
+            z1_g_vk_comm: comm.z1_g_vk,
+            z1_next_vk_comm: comm.z1_next_vk.into(),
+            z1_g_r_ip: ip.z1_g_r.into(),
+            z1_g_a_r_ip: ip.z1_g_a_r.into(),
+            z1_g_b_r_ip: ip.z1_g_b_r.into(),
+            z1_g_c_r_ip: ip.z1_g_c_r.into(),
+            z1_g_ab_r_ip: ip.z1_g_ab_r.into(),
+            z1_g_ac_r_ip: ip.z1_g_ac_r.into(),
+            z1_g_bc_r_ip: ip.z1_g_bc_r.into(),
+            z1_g_abc_r_ip: ip.z1_g_abc_r.into(),
+            z1_next_r_ip: ip.z1_next_r,
+            z1_next_a_r_ip: ip.z1_next_a_r,
+            z1_next_b_r_ip: ip.z1_next_b_r,
+            z1_next_c_r_ip: ip.z1_next_c_r,
+            z1_next_ab_r_ip: ip.z1_next_ab_r,
+            z1_next_ac_r_ip: ip.z1_next_ac_r,
+            z1_next_bc_r_ip: ip.z1_next_bc_r,
+            z1_next_abc_r_ip: ip.z1_next_abc_r,
+        }
+    }
+
+    pub(crate) fn merge(
+        &mut self,
+        left: PermGipaCommitments<E>,
+        right: PermGipaCommitments<E>,
+        x: &E::ScalarField,
+        x_inv: &E::ScalarField,
+    ) {
+        self.z1_g_vk_comm.add_assign(left.z1_g_vk_comm * x + (right.z1_g_vk_comm * x_inv));
+        self.z1_next_vk_comm.add_assign(left.z1_next_vk_comm * x + (right.z1_next_vk_comm * x_inv));
+        self.z1_g_r_ip.add_assign(left.z1_g_r_ip * x + (right.z1_g_r_ip * x_inv));
+        self.z1_g_a_r_ip.add_assign(left.z1_g_a_r_ip * x + (right.z1_g_a_r_ip * x_inv));
+        self.z1_g_b_r_ip.add_assign(left.z1_g_b_r_ip * x + (right.z1_g_b_r_ip * x_inv));
+        self.z1_g_c_r_ip.add_assign(left.z1_g_c_r_ip * x + (right.z1_g_c_r_ip * x_inv));
+        self.z1_g_ab_r_ip.add_assign(left.z1_g_ab_r_ip * x + (right.z1_g_ab_r_ip * x_inv));
+        self.z1_g_ac_r_ip.add_assign(left.z1_g_ac_r_ip * x + (right.z1_g_ac_r_ip * x_inv));
+        self.z1_g_bc_r_ip.add_assign(left.z1_g_bc_r_ip * x + (right.z1_g_bc_r_ip * x_inv));
+        self.z1_g_abc_r_ip.add_assign(left.z1_g_abc_r_ip * x + (right.z1_g_abc_r_ip * x_inv));
+        self.z1_next_r_ip.add_assign(left.z1_next_r_ip * x + (right.z1_next_r_ip * x_inv));
+        self.z1_next_a_r_ip.add_assign(left.z1_next_a_r_ip * x + (right.z1_next_a_r_ip * x_inv));
+        self.z1_next_b_r_ip.add_assign(left.z1_next_b_r_ip * x + (right.z1_next_b_r_ip * x_inv));
+        self.z1_next_c_r_ip.add_assign(left.z1_next_c_r_ip * x + (right.z1_next_c_r_ip * x_inv));
+        self.z1_next_ab_r_ip.add_assign(left.z1_next_ab_r_ip * x + (right.z1_next_ab_r_ip * x_inv));
+        self.z1_next_ac_r_ip.add_assign(left.z1_next_ac_r_ip * x + (right.z1_next_ac_r_ip * x_inv));
+        self.z1_next_bc_r_ip.add_assign(left.z1_next_bc_r_ip * x + (right.z1_next_bc_r_ip * x_inv));
+        self.z1_next_abc_r_ip.add_assign(left.z1_next_abc_r_ip * x + (right.z1_next_abc_r_ip * x_inv));
+    }
+
+    pub(crate) fn check(
+        self,
+        fv: &GipaFinalValue<E>,
+        f1: &E::ScalarField,
+        fr: &E::ScalarField,
+    ) -> bool {
+        // Check with vk
+        // (z1_g, vk)
+        if E::pairing(fv.z1_g, fv.vk) != self.z1_g_vk_comm {
+        }
+        // (z1_next, vk)
+        if fv.vk * fv.z1_next != self.z1_next_vk_comm {
+        }
+        
+        // Check inner product
+        // (z1_g, r)
+        if fv.z1_g * fr != self.z1_g_r_ip {
+        }
+        // (z1_g, a_r)
+        if fv.z1_g * fv.a_r != self.z1_g_a_r_ip {
+        }
+        // (z1_g, b_r)
+        if fv.z1_g * fv.b_r != self.z1_g_b_r_ip {
+        }
+        // (z1_g, c_r)
+        if fv.z1_g * fv.c_r != self.z1_g_c_r_ip {
+        }
+        // (z1_g, ab_r)
+        if fv.z1_g * fv.ab_r != self.z1_g_ab_r_ip {
+        }
+        // (z1_g, ac_r)
+        if fv.z1_g * fv.ac_r != self.z1_g_ac_r_ip {
+        }
+        // (z1_g, bc_r)
+        if fv.z1_g * fv.bc_r != self.z1_g_bc_r_ip {
+        }
+        // (z1_g, abc_r)
+        if fv.z1_g * fv.abc_r != self.z1_g_abc_r_ip {
+        }
+        // (z1_next, r)
+        if fv.z1_next * fr != self.z1_next_r_ip {
+        }
+        // (z1_next, a_r)
+        if fv.z1_next * fv.a_r != self.z1_next_a_r_ip {
+        }
+        // (z1_next, b_r)
+        if fv.z1_next * fv.b_r != self.z1_next_b_r_ip {
+        }
+        // (z1_next, c_r)
+        if fv.z1_next * fv.c_r != self.z1_next_c_r_ip {
+        }
+        // (z1_next, ab_r)
+        if fv.z1_next * fv.ab_r != self.z1_next_ab_r_ip {
+        }
+        // (z1_next, ac_r)
+        if fv.z1_next * fv.ac_r != self.z1_next_ac_r_ip {
+        }
+        // (z1_next, bc_r)
+        if fv.z1_next * fv.bc_r != self.z1_next_bc_r_ip {
+        }
+        // (z1_next, abc_r)
+        if fv.z1_next * fv.abc_r != self.z1_next_abc_r_ip {
+        }
+
+        true
+    }
 }

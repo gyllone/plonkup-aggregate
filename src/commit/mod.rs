@@ -4,26 +4,26 @@ pub mod lookup;
 
 use std::ops::{Deref, DerefMut};
 use ark_std::{cfg_iter, cfg_iter_mut};
-use ark_ec::{AffineCurve, ProjectiveCurve, PairingEngine, msm::VariableBaseMSM};
-use ark_ff::{Field, PrimeField};
+use ark_ec::{VariableBaseMSM, AffineRepr, pairing::{Pairing, PairingOutput}};
+use ark_ff::Field;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-pub type VKey<E> = Key<<E as PairingEngine>::G2Affine>;
+pub type VKey<E> = Key<<E as Pairing>::G2Affine>;
 
-pub type WKey<E> = Key<<E as PairingEngine>::G1Affine>;
+pub type WKey<E> = Key<<E as Pairing>::G1Affine>;
 
 /// Key is a generic commitment key that is instanciated with basis and powers.
 #[derive(Debug, Clone)]
-pub struct Key<G: AffineCurve>(Vec<G>);
+pub struct Key<G: AffineRepr>(Vec<G>);
 
-impl<G: AffineCurve> Key<G> {
+impl<G: AffineRepr> Key<G> {
     pub(crate) fn scale(&self, s: &[G::ScalarField]) -> Self {
         assert_eq!(self.len(), s.len());
 
         let k: Vec<_> = cfg_iter!(&self)
             .zip(cfg_iter!(s))
-            .map(|(g, s)| g.mul(*s).into_affine())
+            .map(|(g, s)| (*g * s).into())
             .collect();
 
         Self(k)
@@ -38,18 +38,16 @@ impl<G: AffineCurve> Key<G> {
         assert_eq!(left.len(), right.len());
 
         cfg_iter_mut!(left)
-            .zip(cfg_iter_mut!(right))
+            .zip(cfg_iter!(right))
             .for_each(|(left, right)| {
-                let mut r = right.mul(*scale);
-                r.add_assign_mixed(left);
-                *left = r.into_affine();
+                *left = (*right * scale + *left).into();
             });
 
         self.0.truncate(split);
     }
 }
 
-impl<G: AffineCurve> Deref for Key<G> {
+impl<G: AffineRepr> Deref for Key<G> {
     type Target = [G];
 
     fn deref(&self) -> &Self::Target {
@@ -57,41 +55,38 @@ impl<G: AffineCurve> Deref for Key<G> {
     }
 }
 
-impl<G: AffineCurve> DerefMut for Key<G> {
+impl<G: AffineRepr> DerefMut for Key<G> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
 ///
-fn pairing<E: PairingEngine>(
+fn pairing<E: Pairing>(
     g1: &[E::G1Affine],
     g2: &[E::G2Affine],
-) -> E::Fqk {
-    let pairs: Vec<_> = cfg_iter!(g1)
-        .zip(cfg_iter!(g2))
-        .map(|(g1, g2)| {
-            (
-                E::G1Prepared::from(*g1),
-                E::G2Prepared::from(*g2),
-            )
-        })
+) -> PairingOutput<E> {
+    let a: Vec<_> = cfg_iter!(g1)
+        .map(|g1| E::G1Prepared::from(*g1))
+        .collect();
+    let b: Vec<_> = cfg_iter!(g2)
+        .map(|g2| E::G2Prepared::from(*g2))
         .collect();
 
-    E::product_of_pairings(&pairs)
+    E::multi_pairing(a, b)
 }
 
 /// Need to be optimized with precomputed tables
-fn multiexponentiation<G: AffineCurve>(
+fn multiexponentiation<G: AffineRepr>(
     scalars: &[G::ScalarField],
     bases: &[G],
-) -> G {
+) -> G
+where
+    G::Group: VariableBaseMSM<MulBase = G>,
+{
     assert_eq!(scalars.len(), bases.len());
 
-    let scalars: Vec<_> = cfg_iter!(scalars).map(|s| s.into_repr()).collect();
-    let result = VariableBaseMSM::multi_scalar_mul(bases, &scalars);
-
-    result.into_affine()
+    G::Group::msm_unchecked(bases, scalars).into()
 }
 
 ///

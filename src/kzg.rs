@@ -1,20 +1,19 @@
-use ark_std::cfg_iter;
-use ark_ec::{AffineCurve, ProjectiveCurve, msm::VariableBaseMSM};
-use ark_ff::PrimeField;
-use ark_poly::{UVPolynomial, univariate::DensePolynomial, Polynomial};
+use ark_ec::{VariableBaseMSM, AffineRepr, CurveGroup, pairing::Pairing};
+use ark_poly::{univariate::DensePolynomial, Polynomial, DenseUVPolynomial};
 use num_traits::{One, Zero};
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
 
 use crate::error::Error;
 
 pub type KZGOpening<G> = G;
 
-pub(super) fn create_kzg_opening<G: AffineCurve>(
+pub(crate) fn create_kzg_opening<G: AffineRepr>(
     powers: &[G],
     poly: &DensePolynomial<G::ScalarField>,
     point: G::ScalarField,
-) -> Result<KZGOpening<G>, Error> {
+) -> Result<KZGOpening<G>, Error>
+where
+    G::Group: VariableBaseMSM<MulBase = G>,
+{
     if poly.degree() + 1 > powers.len() {
         return Err(Error::PolynomialDegreeTooLarge);
     }
@@ -31,14 +30,50 @@ pub(super) fn create_kzg_opening<G: AffineCurve>(
     while num_leading_zeros < coeffs.len() && coeffs[num_leading_zeros].is_zero() {
         num_leading_zeros += 1;
     }
-    let coeffs: Vec<_> = cfg_iter!(&coeffs[num_leading_zeros..])
-        .map(|s| s.into_repr())
-        .collect();
-
-    let w = VariableBaseMSM::multi_scalar_mul(
+    let res = G::Group::msm_unchecked(
         &powers[num_leading_zeros..],
-        &coeffs,
+        &coeffs[num_leading_zeros..],
     );
     
-    Ok(w.into_affine())
+    Ok(res.into())
+}
+
+pub(crate) fn verify_kzg_opening_on_g1<E: Pairing>(
+    g1_base: E::G1Affine,
+    g2_base: E::G2Affine,
+    tau: E::G2Affine,
+    comm: E::G1Affine,
+    pi: E::G1Affine,
+    poly_eval: E::ScalarField,
+    point: E::ScalarField,
+) -> Result<(), Error> {
+    // $ e([h(z)]_1, [\tau]_2-z\cdot[1]_2)=e([f(\tau)]_1-f(z)\cdot[1]_1, [1]_2) $
+    let left = E::pairing(pi, tau + (g2_base * -point));
+    let right = E::pairing(comm + (g1_base * -poly_eval), g2_base);
+
+    if left != right {
+        return Err(Error::PairingCheckFailure);
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn verify_kzg_opening_on_g2<E: Pairing>(
+    g1_base: E::G1Affine,
+    g2_base: E::G2Affine,
+    tau: E::G1Affine,
+    comm: E::G2Affine,
+    pi: E::G2Affine,
+    poly_eval: E::ScalarField,
+    point: E::ScalarField,
+) -> Result<(), Error> {
+    // $ e([\tau]_1-z\cdot[1]_1,[h(z)]_2)=e([1]_1, [f(\tau)]_2-f(z)\cdot[1]_2) $
+    let left = E::pairing(tau + (g1_base * -point), pi);
+    let right = E::pairing(g1_base, comm + (g2_base * -poly_eval));
+
+    if left != right {
+        return Err(Error::PairingCheckFailure);
+    } else {
+        Ok(())
+    }
 }

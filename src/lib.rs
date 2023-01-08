@@ -2,8 +2,7 @@
 // We have quite some functions that require quite some args by it's nature.
 // It can be refactored but for now, we avoid these warns.
 #![allow(clippy::too_many_arguments)]
-#![deny(missing_docs)]
-#![feature(array_from_fn)]
+// #![deny(missing_docs)]
 
 mod util;
 mod kzg;

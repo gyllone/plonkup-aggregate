@@ -1,11 +1,16 @@
-use ark_ec::pairing::Pairing;
+use ark_std::cfg_iter;
+use ark_ec::{pairing::Pairing, AffineRepr};
 use ark_ff::Field;
-use ark_poly::{UVPolynomial, univariate::DensePolynomial};
+use ark_poly::{DenseUVPolynomial, univariate::DensePolynomial};
 use itertools::Itertools;
 use num_traits::One;
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 
 use crate::{
     error::Error,
+    proof::*,
+    util::*,
     commit::{VKey, WKey, wire::*, permutation::*, lookup::*},
     transcript::{TranscriptProtocol, TranscriptAppender},
     kzg::{create_kzg_opening, KZGOpening},
@@ -20,9 +25,9 @@ pub fn aggregate_proofs<E, T, I>(
     transcript: &mut T,
 ) -> Result<AggregateProof<E>, Error>
 where
-    E: PairingEngine,
+    E: Pairing,
     T: TranscriptProtocol<E>,
-    I: IntoIterator<Item = Vec<E::Fr>>,
+    I: IntoIterator<Item = Vec<E::ScalarField>>,
 {
     let n = proofs.len();
     assert!(n.is_power_of_two(), "length of proofs must be power of 2");
@@ -267,23 +272,23 @@ fn prove_gipa<E, T>(
     mut n: usize,
     mut vk: VKey<E>,
     mut wk: WKey<E>,
-    mut r: Vec<E::Fr>,
-    mut a: Vec<E::Fr>,
-    mut b: Vec<E::Fr>,
-    mut z1_next: Vec<E::Fr>,
-    mut h1_next: Vec<E::Fr>,
-    mut h2: Vec<E::Fr>,
-    mut a_r: Vec<E::Fr>,
-    mut b_r: Vec<E::Fr>,
-    mut c_r: Vec<E::Fr>,
-    mut ab_r: Vec<E::Fr>,
-    mut ac_r: Vec<E::Fr>,
-    mut bc_r: Vec<E::Fr>,
-    mut abc_r: Vec<E::Fr>,
-    mut f_r: Vec<E::Fr>,
-    mut z2_next_r: Vec<E::Fr>,
-    mut h1_next_z2_next_r: Vec<E::Fr>,
-    mut h2_z2_next_r: Vec<E::Fr>,
+    mut r: Vec<E::ScalarField>,
+    mut a: Vec<E::ScalarField>,
+    mut b: Vec<E::ScalarField>,
+    mut z1_next: Vec<E::ScalarField>,
+    mut h1_next: Vec<E::ScalarField>,
+    mut h2: Vec<E::ScalarField>,
+    mut a_r: Vec<E::ScalarField>,
+    mut b_r: Vec<E::ScalarField>,
+    mut c_r: Vec<E::ScalarField>,
+    mut ab_r: Vec<E::ScalarField>,
+    mut ac_r: Vec<E::ScalarField>,
+    mut bc_r: Vec<E::ScalarField>,
+    mut abc_r: Vec<E::ScalarField>,
+    mut f_r: Vec<E::ScalarField>,
+    mut z2_next_r: Vec<E::ScalarField>,
+    mut h1_next_z2_next_r: Vec<E::ScalarField>,
+    mut h2_z2_next_r: Vec<E::ScalarField>,
     mut a_g: Vec<E::G1Affine>,
     mut b_g: Vec<E::G1Affine>,
     mut c_g: Vec<E::G1Affine>,
@@ -293,18 +298,18 @@ fn prove_gipa<E, T>(
     mut f_g: Vec<E::G1Affine>,
     mut h2_g: Vec<E::G1Affine>,
     transcript: &mut T,
-    r_inv: E::Fr,
+    r_inv: E::ScalarField,
 ) -> Result<GipaProof<E>, Error>
 where
-    E: PairingEngine,
+    E: Pairing,
     T: TranscriptProtocol<E>,
 {
     // storing the values for including in the proof
     let mut wire_comms = Vec::new();
     let mut perm_comms = Vec::new();
     let mut lookup_comms = Vec::new();
-    let mut challenges: Vec<E::Fr> = Vec::new();
-    let mut challenges_inv: Vec<E::Fr> = Vec::new();
+    let mut challenges: Vec<E::ScalarField> = Vec::new();
+    let mut challenges_inv: Vec<E::ScalarField> = Vec::new();
 
     // GIPA
     while n > 1 {
@@ -413,33 +418,32 @@ where
     }
 
     let final_value = GipaFinalValue {
-        final_a_r: a_r[0],
-        final_b_r: b_r[0],
-        final_c_r: c_r[0],
-        final_ab_r: ab_r[0],
-        final_bc_r: bc_r[0],
-        final_ac_r: ac_r[0],
-        final_abc_r: abc_r[0],
-        final_f_r: f_r[0],
-        final_z2_next_r: z2_next_r[0],
-        final_h1_next_z2_next_r: h1_next_z2_next_r[0],
-        final_h2_z2_next_r: h2_z2_next_r[0],
-        final_r: r[0],
-        final_a: a[0],
-        final_b: b[0],
-        final_a_g: a_g[0],
-        final_b_g: b_g[0],
-        final_c_g: c_g[0],
-        final_z1_next: z1_next[0],
-        final_h1_next: h1_next[0],
-        final_h2: h2[0],
-        final_z1_g: z1_g[0],
-        final_z2_g: z2_g[0],
-        final_h1_g: h1_g[0],
-        final_f_g: f_g[0],
-        final_h2_g: h2_g[0],
-        final_vk: vk[0],
-        final_wk: wk[0],
+        a_r: a_r[0],
+        b_r: b_r[0],
+        c_r: c_r[0],
+        ab_r: ab_r[0],
+        bc_r: bc_r[0],
+        ac_r: ac_r[0],
+        abc_r: abc_r[0],
+        f_r: f_r[0],
+        z2_next_r: z2_next_r[0],
+        h1_next_z2_next_r: h1_next_z2_next_r[0],
+        h2_z2_next_r: h2_z2_next_r[0],
+        a: a[0],
+        b: b[0],
+        a_g: a_g[0],
+        b_g: b_g[0],
+        c_g: c_g[0],
+        z1_next: z1_next[0],
+        h1_next: h1_next[0],
+        h2: h2[0],
+        z1_g: z1_g[0],
+        z2_g: z2_g[0],
+        h1_g: h1_g[0],
+        f_g: f_g[0],
+        h2_g: h2_g[0],
+        vk: vk[0],
+        wk: wk[0],
     };
     
     // Fiat-Shamir challenge
@@ -458,7 +462,7 @@ where
         &ks.h_powers,
         &challenges_inv,
         z,
-        E::Fr::one(),
+        E::ScalarField::one(),
     )?;
 
     let wk_opening = prove_commitment_key(
@@ -478,16 +482,16 @@ where
     })
 }
 
-fn prove_commitment_key<G: AffineCurve>(
+fn prove_commitment_key<G: AffineRepr>(
     powers: &[G],
     challenges: &[G::ScalarField],
-    point: G::ScalarField,
+    z: G::ScalarField,
     shift: G::ScalarField,
 ) -> Result<KZGOpening<G>, Error> {
     let v_coeffs = poly_coeffs_from_transcript(challenges, shift);
     let v_poly = DensePolynomial::from_coefficients_vec(v_coeffs);
 
-    create_kzg_opening(powers, &v_poly, point)
+    create_kzg_opening(powers, &v_poly, z)
 }
 
 #[inline]

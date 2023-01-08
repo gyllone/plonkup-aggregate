@@ -2,7 +2,7 @@
 //! PLONKUP aggeration system
 
 use ark_std::{cfg_iter, cfg_iter_mut};
-use ark_ec::{AffineCurve, ProjectiveCurve};
+use ark_ec::AffineRepr;
 use ark_ff::Field;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -11,7 +11,7 @@ use rayon::prelude::*;
 /// between A and B for the Groth16 aggregation: A^r * B. It is required as it
 /// is not enough to simply prove the ipp of A*B, we need a random linear
 /// combination of those.
-pub(super) fn structured_scalar_power<F: Field>(num: usize, s: &F) -> Vec<F> {
+pub(crate) fn structured_scalar_power<F: Field>(num: usize, s: &F) -> Vec<F> {
     let mut powers = vec![F::one()];
     for i in 1..num {
         powers.push(powers[i - 1] * s);
@@ -19,7 +19,7 @@ pub(super) fn structured_scalar_power<F: Field>(num: usize, s: &F) -> Vec<F> {
     powers
 }
 
-pub(super) fn compress_affines<G: AffineCurve>(
+pub(crate) fn compress_affines<G: AffineRepr>(
     vec: &mut Vec<G>,
     split: usize,
     scale: &G::ScalarField,
@@ -30,15 +30,13 @@ pub(super) fn compress_affines<G: AffineCurve>(
     cfg_iter_mut!(left)
         .zip(cfg_iter!(right))
         .for_each(|(left, right)| {
-            let mut right = right.mul(*scale);
-            right.add_assign_mixed(left);
-            *left = right.into_affine();
+            *left = (*right * scale + *left).into();
         });
 
     vec.truncate(split);
 }
 
-pub(super) fn compress_scalars<F: Field>(
+pub(crate) fn compress_scalars<F: Field>(
     vec: &mut Vec<F>,
     split: usize,
     scale: &F,
@@ -60,19 +58,19 @@ pub(super) fn compress_scalars<F: Field>(
 /// the point z, where transcript contains the reversed order of all challenges (the x).
 /// THe challenges must be in reversed order for the correct evaluation of the
 /// polynomial in O(logn)
-pub(super) fn poly_eval_from_transcript<F: Field>(
+pub(crate) fn poly_eval_from_transcript<F: Field>(
     transcript: &[F],
-    mut z: F,
-    r: &F,
+    mut point: F,
+    r: F,
 ) -> F {
     let mut res = F::one();
     for (i, x) in transcript.iter().enumerate() {
         if i == 0 {
-            z.mul_assign(r);
+            point.mul_assign(r);
         } else {
-            z = z.square();
+            point = point.square();
         }
-        res.mul_assign(z * x + F::one());
+        res.mul_assign(point * x + F::one());
     }
 
     res
@@ -81,7 +79,7 @@ pub(super) fn poly_eval_from_transcript<F: Field>(
 // This method expects the coefficients in reverse order so transcript[i] =
 // x_{l-j}.
 // f(X) = \prod_{i=0}^{l-1} \left ( 1 + x_{l-i} (rX)^{2^i} \right )
-pub(super) fn poly_coeffs_from_transcript<F: Field>(
+pub(crate) fn poly_coeffs_from_transcript<F: Field>(
     transcript: &[F],
     mut r: F,
 ) -> Vec<F> {
